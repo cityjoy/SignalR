@@ -210,15 +210,19 @@ namespace Microsoft.AspNet.SignalR.Transports
                        .Then(s => WriteInit(s), this);
         }
 
-        protected override async Task ProcessSendRequest()
+        protected override Task ProcessSendRequest()
         {
-            INameValueCollection form = await Context.Request.ReadForm().PreserveCulture();
-            string data = form["data"] ?? Context.Request.QueryString["data"];
-
-            if (Received != null)
+            return Context.Request.ReadForm().Then(form =>
             {
-                await Received(data).PreserveCulture();
-            }
+                string data = form["data"] ?? Context.Request.QueryString["data"];
+
+                if (Received != null)
+                {
+                    return Received(data);
+                }
+
+                return TaskAsyncHelper.Empty;
+            });
         }
 
         private static Task WriteInit(LongPollingTransport transport)

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 
 namespace Microsoft.AspNet.SignalR.Hubs
@@ -23,40 +24,65 @@ namespace Microsoft.AspNet.SignalR.Hubs
         /// </summary>
         /// <param name="invoke">A function that invokes a server-side hub method.</param>
         /// <returns>A wrapped function that invokes a server-side hub method.</returns>
+        [SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes", Justification = "Exceptions are flowed back to the caller.")]
         public virtual Func<IHubIncomingInvokerContext, Task<object>> BuildIncoming(Func<IHubIncomingInvokerContext, Task<object>> invoke)
         {
-            return async context =>
+            return context =>
             {
+                var tcs = new TaskCompletionSource<object>();
+
                 if (OnBeforeIncoming(context))
                 {
                     try
                     {
-                        var result = await invoke(context).OrEmpty().PreserveCulture();
-                        return OnAfterIncoming(result, context);
+                        var invokeTask = invoke(context).OrEmpty().Then((result, invokerContext) =>
+                        {
+                            result = OnAfterIncoming(result, invokerContext);
+                            tcs.TrySetResult(result);
+                            return (object)null;
+                        }, context);
+
+                        invokeTask.ContinueWithNotComplete(() =>
+                        {
+                            if (invokeTask.IsFaulted)
+                            {
+                                HandleIncomingError(invokeTask.Exception, context, tcs);
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.Assert(invokeTask.IsCanceled);
+                                HandleIncomingError(new OperationCanceledException(), context, tcs);
+                            }
+                        });
                     }
                     catch (Exception ex)
                     {
-                        var exContext = new ExceptionContext(ex);
-                        OnIncomingError(exContext, context);
-
-                        var error = exContext.Error;
-                        if (error == ex)
-                        {
-                            throw;
-                        }
-                        else if (error != null)
-                        {
-                            throw error;
-                        }
-                        else
-                        {
-                            return exContext.Result;
-                        }
+                        HandleIncomingError(ex, context, tcs);
                     }
                 }
+                else
+                {
+                    tcs.TrySetResult(null);
+                }
 
-                return null;
+                return tcs.Task;
             };
+        }
+
+        private void HandleIncomingError(Exception ex, IHubIncomingInvokerContext context, TaskCompletionSource<object> tcs)
+        {
+            var exContext = new ExceptionContext(ex);
+            OnIncomingError(exContext, context);
+
+            var error = exContext.Error;
+            if (error != null)
+            {
+                tcs.TrySetUnwrappedException(error);
+            }
+            else
+            {
+                tcs.TrySetResult(exContext.Result);
+            }
         }
 
         /// <summary>

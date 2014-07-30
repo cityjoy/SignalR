@@ -136,15 +136,19 @@ namespace Microsoft.AspNet.SignalR.Transports
             _transportLifetime.Complete(ex);
         }
 
-        protected virtual async Task ProcessSendRequest()
+        protected virtual Task ProcessSendRequest()
         {
-            INameValueCollection form = await Context.Request.ReadForm().PreserveCulture();
-            string data = form["data"];
-
-            if (Received != null)
+            return Context.Request.ReadForm().Then(form =>
             {
-                await Received(data).PreserveCulture();
-            }
+                string data = form["data"];
+
+                if (Received != null)
+                {
+                    return Received(data);
+                }
+
+                return TaskAsyncHelper.Empty;
+            });
         }
 
         [SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes", Justification = "Exceptions are flowed to the caller.")]
